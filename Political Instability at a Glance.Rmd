@@ -1,0 +1,751 @@
+---
+title: "Political Instability at a Glance"
+output: html_document
+---
+
+(A graph-heavy post on the post-WWII history of political instability.)
+
+```{r loadData, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+library(countrycode)
+library(foreign)
+library(stringr)
+library(dplyr)
+library(lubridate)
+library(reshape2)
+
+# Load and prepare datasets
+
+# Polity data is available here: http://www.systemicpeace.org/inscrdata.html, but it's easy to download directly:
+polity_cases <- read.spss("http://www.systemicpeace.org/inscr/p4v2013d.sav",to.data.frame=TRUE)
+
+polity_cases <- polity_cases %>% mutate(startdate = mdy(paste0(bmonth,"-",bday,"-",byear)),
+                                        enddate = mdy(paste0(emonth,"-",eday,"-",eyear)), 
+                                        xrreg = as.numeric(xrreg),
+                                        xrcomp = as.numeric(xrcomp),
+                                        xropen = as.numeric(xropen), 
+                                        xconst=as.numeric(xconst),
+                                        parreg=as.numeric(parreg),
+                                        parcomp=as.numeric(parcomp),
+                                        exrec=factor(exrec,
+                                                     labels=c("Transition",
+                                                              "Interruption",
+                                                              "Interregnum", 
+                                                              names(sort(attr(exrec,"value.labels"))))),
+                                        exconst=factor(exconst,
+                                                       labels=c("Transition",
+                                                                "Interruption",
+                                                                "Interregnum",
+                                                                names(sort(attr(exconst,"value.labels"))))),
+                                        polcomp=factor(polcomp,
+                                                       labels=c("Transition",
+                                                                "Interruption",
+                                                                "Interregnum",
+                                                                names(sort(attr(polcomp,"value.labels"))))),
+                                        enddate = ymd(ifelse(is.na(enddate),"2013-12-31",as.character(enddate)))) %>%
+  rename(polity_country = country)
+
+# Center for Systemic Peace Coups list to supplement Powell-Thyne; available here: http://www.systemicpeace.org/inscrdata.html
+cspcoups <- read.csv("../Data/CSPCoupsList2013.csv") %>% 
+  filter(success <3) %>% 
+  mutate(coup = 3- success, 
+         ccode = countrycode(country,origin="country.name",dest="cown",warn=TRUE),
+         date = ymd(paste(year,mth,day,sep="-")),
+         attempt_type = factor(coup,labels=c("Unsuccessful","Successful"))) %>% 
+  rename(powell_country = country, month=mth) %>% 
+  filter(!is.na(date), year < 1950) %>% 
+  select(powell_country, ccode, year, month, day, coup, attempt_type, date)
+  
+
+# The UDS data is available here: http://www.unified-democracy-scores.org/index.html
+uds <- read.csv("../Data/uds_summary.csv") %>% 
+  rename(uds_country = country, ccode = cowcode) %>%
+  mutate(date = ymd(paste0(year,"-6-15")))
+
+PowellThyne <- read.table("http://www.uky.edu/~clthyn2/coup_data/powell_thyne_coups_final.txt",header=TRUE) %>% 
+  rename(powell_country = country) %>% 
+  mutate(attempt_type = factor(coup,labels=c("Unsuccessful","Successful")),
+         date = ymd(paste(year,month,day,sep="-")))
+
+PowellThyne <- rbind(PowellThyne,cspcoups)
+
+# The Archigos data is available here: http://www.rochester.edu/college/faculty/hgoemans/data.htm
+# One can also use
+# archigos <- read.dta(url("http://www.rochester.edu/college/faculty/hgoemans/Archigos_2.9-Public.dta")) 
+archigos <- read.dta("../Data/Archigos_2.9-Public.dta") %>% 
+  mutate(exitcode2 = factor(factor(exitcode,labels=c("-999 Missing (currently only before 1919)",
+                                                     "0 Regular or died in office",
+                                                     "1-2 Domestic popular protest",
+                                                     "1-2 Domestic popular protest",
+                                                     "3-4 Rebel forces",
+                                                     "3-4 Rebel forces",
+                                                     "5-6, 16 Military",
+                                                     "5-6, 16 Military",
+                                                     "7-8 Other government actors",
+                                                     "7-8 Other government actors",
+                                                     "9 Threat or use of foreign force",
+                                                     "11 Assassination by unsupported individual",
+                                                     "5-6, 16 Military",
+                                                     "111 Irregular manner through other means or processes"))),
+         startdate = dmy(startdate),
+         enddate = dmy(enddate),
+         entry_year = year(startdate),
+         exit_year= year(enddate), 
+         year = exit_year,
+         exit = factor(exit,labels=c("Still in power as of 2004","Missing","Regular/constitutional means","Death, suicide or retirement due to ill health","Death, suicide or retirement due to ill health","Death, suicide or retirement due to ill health","Irregular means","Irregular means"))) 
+
+# The Geddes, Wright, and Frantz dataset of political regimes is available here: http://sites.psu.edu/dictators/
+gwf <- read.delim("../Data/GWF Autocratic Regimes 1.2/GWF Autocratic Regimes 1.2/GWF_AllPoliticalRegimes.txt") %>% 
+  mutate(full_regimetype = ifelse((is.na(gwf_regimetype)),as.character(gwf_nonautocracy),as.character(gwf_regimetype)),
+         full_regimetype=as.factor(full_regimetype)) %>% 
+  rename(ccode = cowcode)  
+
+# The Maddison data is available here: http://www.ggdc.net/maddison/maddison-project/home.htm. You will need to save the file as csv, and some of the code below may need to be revised, depending on changes with the original file
+
+maddison <- read.csv("../Data/Maddison GDP data_2013-01.csv") %>% 
+  rename(Czechoslovakia = Czecho.slovakia,
+         Turkmenistan = Turk.menistan,
+         "Costa Rica"= Costa.Rica,
+         "Haiti" = Haïti,
+         "Puerto Rico" = Puerto.Rico,
+         "Hong Kong" = Hong.Kong,
+         "United Arab Emirates" = UAE,
+         "New Zealand" = N..Zealand,
+         "Democratic Republic of Congo"=Congo.Kinshasa,
+         "Dominican Republic"= Dominican.Rep.,
+         "North Korea"=North.Korea, 
+         "Great Britain" = England.GB.UK, 
+         "Saudi Arabia" = Saudi.Arabia,
+         "Central African Republic" = Centr..Afr..Rep.)
+
+maddison <- melt(maddison,id.vars="year") %>% 
+  filter(variable != "F..Yugoslavia", variable != "F..Czecho.slovakia") %>% 
+  mutate(maddison_country = countrycode(variable,origin="country.name","country.name"), 
+         ccode = countrycode(maddison_country,origin="country.name",destination="cown"), 
+         ccode = ifelse(variable =="North.Korea",731,ccode), 
+         maddison_country = ifelse(ccode ==731,"North Korea",maddison_country), 
+         ccode = ifelse(ccode == 679,678,ccode), value = as.numeric(value),
+         date = ymd(paste0(year,"-6-15"))) %>% 
+  filter(!is.na(maddison_country))
+
+# The ucdpConflict dataset of conflict data is available here: http://www.pcr.uu.se/research/ucdp/datasets/ucdp_ucdpConflict_armed_conflict_dataset/
+# Usually this works: 
+load(url("http://www.pcr.uu.se/digitalAssets/124/124920_1ucdpprioarmedconflictdataset4.2014a.rdata")) 
+
+library(tidyr) # Need this for the "unnest" function
+ucdpConflict <- ucdpConflict %>% 
+  rename(year = Year) %>%
+  mutate(GWNoLoc = strsplit(as.character(GWNoLoc), ", ")) %>%  
+  unnest(GWNoLoc) %>% # Expands list values such as "33","45" so that 33 and 45 appear in 2 rows
+  mutate(ccode = as.numeric(as.character(GWNoLoc))) %>% filter(ccode != -99)
+
+# I want to harmonize the country codes with Gleditsch and Ward's list of states so that we have a consistent treatment of all country-year pairs for all countries (e.g., in cases where a state has split up etc.) This is basically very elaborate data-munging intended to eliminate blank graphs in a few cases (e.g., Yugoslavia, Yemen, Germany)
+
+# Gleditsch and Ward's list of independent states
+GWCodes <- read.delim("http://privatewww.essex.ac.uk/~ksg/data/iisystem.dat",header=FALSE) 
+microstates <- read.delim("http://privatewww.essex.ac.uk/~ksg/data/microstatessystem.dat",header=FALSE)
+GWCodes$microstate = FALSE
+microstates$microstate = TRUE
+GWCodes <- rbind(GWCodes,microstates)
+rm(microstates)
+
+names(GWCodes) <- c("ccode","GW_country_abbr","GW_country","GW_startdate","GW_enddate","microstate")
+
+GWCodes <- GWCodes %>% mutate(GW_startdate = dmy(GW_startdate), 
+                              GW_enddate = dmy(GW_enddate), 
+                              GW_enddate = (ifelse(GW_enddate == ymd(20121231),
+                                                      as.character(now()),
+                                                      as.character(GW_enddate))),
+                              min_year = year(GW_startdate),
+                              max_year = year(GW_enddate))
+
+# Transform these codes into country-year format
+
+GWCodes <- GWCodes %>% group_by(ccode) %>% mutate(period_number = seq_along(min_year)) 
+GWCodesYearly <- GWCodes %>% group_by(ccode,GW_country_abbr,GW_country,period_number,GW_startdate,GW_enddate,microstate) %>% do(data.frame(year=.$min_year:.$max_year)) %>% ungroup()
+GWCodesYearly$independent = TRUE
+
+# Test to check that all the coups in Powell/Thyne dataset are present in GWCodesYearly; the only one not present is Sudan in 1955, before independence
+# anti_join(PowellThyne %>% ungroup() %>% select(ccode,powell_country,year),GWCodesYearly)  %>% arrange(ccode,year)
+
+
+# Fix the polity cases
+case1 <- anti_join(polity_cases %>% ungroup(),GWCodes) %>% arrange(ccode)
+# case1 %>% select(ccode,scode,polity_country,startdate,enddate) %>% unique()
+# generate regex
+pattern <- paste(paste0(unique(str_trim(case1$polity_country)),collapse="|"),"Russia","Vietnam","USSR","Soviet",sep="|")
+# find countries to change
+case1Changes <- GWCodes %>% filter(grepl(pattern,GW_country))
+# case1Changes
+case1Changes$scode <- c("SAR","MNT","MNT","SER","SER","USR","ETI","SSU","YEM","YPR","PKS","VNM","VIE","RVN")
+
+case1Changes <- case1Changes %>% select(ccode,scode,GW_startdate,GW_enddate)
+
+for(i in 1:nrow(case1Changes)) {
+  r <- case1Changes[i, ]
+  polity_cases <- polity_cases %>% ungroup() %>% mutate(ccode = ifelse(scode %in% r$scode & int_overlaps(new_interval(startdate,enddate),new_interval(r$GW_startdate,r$GW_enddate)),r$ccode,ccode))
+}
+# Test that it works
+# anti_join(polity_cases %>% ungroup(),GWCodes) %>% arrange(ccode)
+# Only Serbia before 1917 is left
+
+# case 1: codes don't exist, UDS
+# case1 <- anti_join(uds %>% ungroup() %>% select(ccode,uds_country,year) %>% unique(),GWCodes)
+# case1 %>% select(ccode,uds_country) %>% unique()
+# All codes exist!
+
+#case 1: codes don't exist, gwf
+# case1 <- anti_join(gwf %>% ungroup() %>% select(ccode,gwf_country,year) %>% unique(),GWCodes)
+# case1 %>% select(ccode,gwf_country) %>% unique()
+# All codes exist!
+
+# case 1: codes don't exist, archigos
+# case1 <- anti_join(archigos %>% ungroup() %>% select(ccode,idacr,year) %>% unique(),GWCodes)
+# case1 %>% select(ccode,ccname,idacr) %>% unique()
+# All codes exist!
+
+#case2: code matches but years don't
+case2 <- anti_join(uds %>% ungroup() %>% select(ccode,uds_country,year),GWCodesYearly) %>% arrange(ccode,year)
+# case2 %>% select(ccode,uds_country) %>% unique() %>% as.data.frame() 
+# Only Yugoslavia is problematic
+case2 <- case2 %>% filter(uds_country == "Yugoslavia (Serbia)")
+case2Changes <- GWCodes %>% filter(grepl("Serbia",GW_country))
+case2Changes$uds_country <- c("Yugoslavia (Serbia)","Yugoslavia (Serbia)")
+for(i in 1:nrow(case2Changes)) {
+  r <- case2Changes[i, ]
+  uds <- uds %>% ungroup() %>% mutate(ccode = ifelse(uds_country %in% r$uds_country & year >= r$min_year & year <= r$max_year,r$ccode,ccode))
+}
+# Check that it works:
+# anti_join(uds %>% ungroup() %>% select(ccode,uds_country,year),GWCodesYearly) %>% filter(year > 1945) %>% arrange(ccode,year) 
+
+#case2: code matches but years don't, GWF
+case2 <- anti_join(gwf %>% ungroup() %>% select(ccode,gwf_country,year),GWCodesYearly) %>% arrange(ccode,year)
+# case2 %>% select(ccode,gwf_country) %>% unique() %>% as.data.frame() 
+case2Changes <- GWCodes %>% filter(ccode %in% case2$ccode | grepl(paste0(case2$gwf_country,collapse="|"),GW_country) | grepl("German Federal|Serbia",GW_country)) %>% filter(ccode != 345)
+case2Changes$gwf_country <- c("Germany","Germany","Czechoslovakia","Serbia","Serbia")
+for(i in 1:nrow(case2Changes)) {
+  r <- case2Changes[i, ]
+  gwf <- gwf %>% ungroup() %>% mutate(ccode = ifelse(gwf_country %in% r$gwf_country & year >= r$min_year & year <= r$max_year,r$ccode,ccode))
+}
+# Check that it works:
+# anti_join(gwf %>% ungroup() %>% select(ccode,gwf_country,year),GWCodesYearly)  %>% arrange(ccode,year)
+
+# case2: code matches but years don't
+# case2 <- anti_join(archigos %>% ungroup() %>% select(ccode,idacr,year),GWCodesYearly %>% filter(independent)) %>% arrange(ccode,year)
+# case2 %>% select(ccode,ccname) %>% unique() %>% as.data.frame() 
+# All before independence - nothing to do!
+
+# Calculates the beginning and end years of interruption periods
+
+# Now we create a "countries" column that is consistent accross all datasets
+basic_codes <- GWCodes %>% 
+  select(ccode,GW_country_abbr,GW_country) %>% 
+  unique() %>% 
+  filter(GW_country != "Madagascar") %>% # Madagascar appears with the same code but two different names.
+  rename(country = GW_country,  GW_scode = GW_country_abbr)
+
+# Add region info
+basic_codes <- basic_codes %>% 
+  mutate(region = countrycode(country,origin="country.name",destination="region",warn=TRUE),
+         continent = countrycode(country,origin="country.name",destination="continent",warn=TRUE))
+
+pattern <- as.character(unique(basic_codes$country[ is.na(basic_codes$region) ]))
+
+missing.regions  <- c("Central America", "Western Europe", "Western Europe","Western Europe","Western Europe","Western Europe","Western Europe","Western Europe","Western Europe","Western Europe","Central Europe", "Eastern Europe","Southern Europe","Southern Europe","Southern Europe","Southern Europe","Southern Europe","Southern Europe","Eastern Africa","Southern Africa","Southern Africa","Western Asia","Western Asia","Eastern Asia","Eastern Asia", "South-Eastern Asia", "South-Eastern Asia","Eastern Europe","Eastern Europe")
+missing.continents <- unlist(str_extract_all(missing.regions,"Asia|Europe|Africa|America"))
+missing.continents[ missing.continents == "America" ] <- "Americas"
+
+for(i in 1:length(pattern)) {
+  basic_codes$region[grepl(pattern[i],basic_codes$country,fixed=TRUE)] <- missing.regions[i]
+  basic_codes$continent[grepl(pattern[i],basic_codes$country,fixed=TRUE)] <- missing.continents[i]
+}
+# Check that it works
+# basic_codes %>% arrange(country) %>% as.data.frame()
+
+# Now the "country" column in all datasets is identical
+polity_cases <- left_join(polity_cases,basic_codes)
+uds <- left_join(uds,basic_codes)
+gwf <- left_join(gwf,basic_codes)
+PowellThyne <- left_join(PowellThyne,basic_codes)
+archigos <- left_join(archigos,basic_codes)
+maddison <- left_join(maddison,basic_codes)
+ucdpConflict <- left_join(ucdpConflict,basic_codes) 
+
+# A dataset just of the interruptions - useful for plotting
+interruptions <- polity_cases %>% filter(polity < -10,!is.na(country))
+
+# The enddate of most states should now be NA
+GWCodes <- GWCodes %>% mutate(GW_enddate = ymd(ifelse(GW_enddate > ymd(20121231),NA,as.character(GW_enddate))))
+
+# Calculates regime start and end years
+gwf <- gwf %>% 
+  group_by(country) %>% 
+  mutate(period_number =  (c(diff(as.numeric(full_regimetype)),0)), 
+         period_number = cumsum(abs(period_number)),
+         period_number = lag(period_number),
+         period_number=ifelse(is.na(period_number),0,period_number)) %>% 
+  group_by(ccode,period_number) %>% 
+  mutate(begin_year = min(year),end_year=max(year)) %>% 
+  ungroup()
+
+# Dataset with start and end dates of each conflict episode - useful for plotting below
+conflicts <- ucdpConflict %>% 
+  group_by(country,ConflictId) %>%
+  mutate(period_number =  (c(diff(IntensityLevel),0)), 
+         period_number = cumsum(abs(period_number)),
+         period_number = lag(period_number),
+         period_number=ifelse(is.na(period_number),0,period_number)) %>% 
+  group_by(country,ConflictId,period_number) %>% 
+  mutate(start_year = min(year),end_year=max(year), 
+         EpEndDate = ifelse(is.na(EpEndDate),paste0(end_year,"-12-31"),as.character(EpEndDate)),
+         StartDate2 = ifelse(StartDate2 < start_year, paste0(start_year,"-01-01"),as.character(StartDate2)),startdate = ymd(StartDate2),enddate = ymd(EpEndDate)) %>% 
+  ungroup() %>%
+  distinct(ConflictId,country,IntensityLevel,startdate,enddate) %>%
+  mutate(TypeOfConflict = factor(TypeOfConflict,labels=c("Extrasystemic/Colonial","Interstate","Internal","Internationalized internal")), IntensityLevel = factor(IntensityLevel,labels=c("Minor armed conflict","War")))
+
+conflicts$country[ is.na(conflicts$country)] <- "India"
+conflicts$region[ is.na(conflicts$region)] <- "Southern Asia"
+conflicts$continent[ is.na(conflicts$continent)] <- "Asia"
+
+# Dataset with start and end dates of regimes
+gwf_regimetypes <- gwf %>% 
+  distinct(country,ccode,period_number) %>% 
+  mutate(startdate = ymd(paste0(begin_year,"-1-1")),enddate = ymd(paste0(end_year,"-12-31")))
+
+rm(case1,case2,case1Changes,case2Changes,r,pattern,i,missing.regions,missing.continents,GWCodesYearly)
+
+```
+
+Despite its ubiquity in everyday discourse, I find the concept of "political instability" to exasperatingly vague, encompassing everything from polarized electorates to coups to civil war. Nevertheless, one can still understand most of the phenomena that fall under that rubric as the sorts of events that happen when the norms supposedly regulating political competition fail to be "[motivationally relevant](http://papers.ssrn.com/sol3/papers.cfm?abstract_id=2027249)" for sufficiently powerful groups of people. [Very wide-ranging normative breakdowns are revolutions](http://abandonedfootnotes.blogspot.com/2015/01/the-revolution-as-drinking-party.html) and civil wars (Jack Goldstone [once noted that the great revolutions were characterized by "fractal" breakdowns of norms](http://www.annualreviews.org/doi/pdf/10.1146/annurev.polisci.4.1.139@violence.2013.1.issue-1)); but coups, other forms of "irregular" leader exit, spikes of protest, and transitional situations can be understood as moments where the norms that are supposed to channel and limit the competition for power break down, either because sufficiently powerful groups disagree about what the relevant norms *are*, or because they can disregard them with impunity and perhaps wish to impose alternative norms.  
+
+The identification of political instability events is unavoidably fraught, since what counts as the relevant norm governing political competition, and whether the norm has actually been violated, disregarded, or otherwise violently reinterpreted, will often be disputed. Sometimes it will simply be impossible to tell whether [some particular event -- e.g, the recent happenings in Lesotho or the Gambia -- counts as a coup](https://dartthrowingchimp.wordpress.com/2015/01/07/schrodingers-coup/), or whether the fall of some leader is in accordance with "recognized" norms of political competition; indeed, I take it that sometimes there is simply no fact of the matter, though perhaps the very existence of disagreement about the nature of the event (whether some coup counts as the beginning of a revolution, for example) is itself significant. And of course many events that signal the weakness of norms regulating political competition -- aborted coup attempts, thwarted palace conspiracies -- simply never see the light of day. Nevertheless, it is still possible to get a glimpse of the broad patterns of political instability during the post WWII era. 
+
+Here's one way of doing it. (See the note on code and data at the end for details). The picture below graphs five forms of instability, per country: the estimated level of democracy and thus regime change, for the period 1946-2012 (from the [Unified Democracy Scores](http://www.unified-democracy-scores.org/uds.html) by Pemstein, Meserve, and Melton); vertical red and blue lines are, respectively, successful and unsuccessful *overt* coup attempts for the period 1950-2014 (from the [data gathered by Powell and Thyne](http://www.jonathanmpowell.com/coup-detat-dataset.html)); dotted black lines track irregular leader exits (sometimes coinciding, sometimes not, with the coup data from Powell and Thyne, and including everything from assassinations to revolutionary overthrow), from the period 1946-2004 (from the [Archigos](http://www.rochester.edu/college/faculty/hgoemans/data.htm) dataset by Goemans, Gleditsch, and Chiozza - can't wait for their update to 2014!); shaded colored areas track armed conflict episodes from 1946 to 2008 (from the [UCDP-ucdpConflict](http://www.ucdpConflict.org/Data/Armed-Conflict/) dataset); and light grey shaded areas track periods of "interruption," "interregnum," or "transition" (basically, foreign occupation, anarchy, political breakdown or transition) from the [polity dataset](http://www.systemicpeace.org/inscrdata.html), in the 1946 to 2013 period. The figure is organized as follows: countries with the most coups are at the top; countries with no coups but the most years of armed conflict follow:  
+
+```{r udsCoups, echo=FALSE, fig.height=38, warning=FALSE, message=FALSE}
+library(ggplot2)
+
+data <- uds  
+
+data <- data %>% ungroup() %>% arrange(continent,region,country) 
+  
+data$country <- reorder(data$country,as.numeric(rownames(data)))
+
+
+instability_picture <- function(countrylist,ncol=NULL) {
+  p <- ggplot() + 
+    geom_line(data=data %>% filter(country %in% countrylist),aes(x=date,y=mean)) + # Basic UDS score
+    geom_ribbon(data=data %>% filter(country %in% countrylist),aes(x=date,ymax=pct975,ymin=pct025),alpha=0.2) + # 95% confidence interval
+    geom_segment(data = PowellThyne  %>% filter(country %in% countrylist),aes(x=date,xend=date,y=-3,yend=3,color=reorder(attempt_type,-coup)))  + # Coup lines
+    geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945) %>% filter(country %in% countrylist),aes(x=enddate,xend=enddate,y=-3,yend=3) ,linetype=3,color="black")  + # Irregular exits lines
+    geom_rect(data=interruptions %>% filter(year(enddate) > 1945) %>% filter(country %in% countrylist),aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3),alpha=0.2) + # Polity interregnums and interruptions 
+    geom_rect(data=conflicts %>% filter(end_year > 1945) %>% filter(country %in% countrylist),aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3,fill=TypeOfConflict,alpha=IntensityLevel)) + 
+    scale_alpha_discrete(range=c(0.05,0.2)) + # Wars
+    coord_cartesian(ylim=c(-3,3),xlim=c(ymd(19450101,20150101))) +
+    labs(y="Mean Unified Democracy Score", fill="Type of armed conflict (UCDP/PRIO)",x="Year",color="Coup?",alpha="Conflict intensity")+
+    facet_wrap(~country,ncol=ncol) +
+    geom_hline(yintercept=0,color="red")+
+    theme_bw() +
+    guides(fill=guide_legend(title.position="top",ncol=2)) +
+    theme(legend.position="bottom")
+  p
+}
+
+instability_picture(levels(data$country),4)
+```
+
+Coups, wars, irregular leadership transitions, changes in democracy, and periods of "interruption" are distinct phenomena, but they all indicate normative breakdowns or normative fluidity (as in periods of transition to democracy, where the norms regulating political competition are not yet recognized by all relevant actors). The graph is deliberately crowded -- I tried to create something like the spectral lines of chemical elements -- yet there are some obvious patterns. Latin American countries have suffered from more from coups and irregular leadership transitions than from major armed conflict, and their levels of democracy have fluctuated more (Bolivia and Argentina compete for the  dubious honor of having had the most coups and coup attempts - counting an overt coup attempt as half a coup); South Asian countries have suffered more from major armed conflict. Some countries in the Middle East (Iraq and Syria, for example) have lots of just about everything. Here are some regional breakdowns that I find strangely beautiful: 
+
+```{r regionalPatterns, fig.height = 15, echo=FALSE,warning=FALSE, message=FALSE}
+
+ggplot() + 
+  geom_smooth(data=data,aes(x=date,y=mean)) + # Basic UDS score
+  geom_segment(data = PowellThyne %>% filter(coup > 0),aes(x=date,xend=date,y=-3,yend=3,color=reorder(attempt_type,-coup)))  + # Coup lines
+  geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945),aes(x=enddate,xend=enddate,y=-3,yend=3),linetype=3,color="black")  + # Irregular exits lines
+  geom_rect(data=interruptions %>% filter(year(enddate) > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3),alpha=0.2) + # Polity interregnums and interruptions 
+  geom_rect(data=conflicts %>% filter(end_year > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3,fill=TypeOfConflict,alpha=IntensityLevel)) + 
+  scale_alpha_discrete(range=c(0.05,0.2)) + # Wars
+  coord_cartesian(ylim=c(-3,3),xlim=c(ymd(19450101,20150101))) +
+  labs(y="Mean Unified Democracy Score", fill="Type of armed conflict (UCDP/PRIO)",x="Year",color="Coup?",alpha = "Conflict intensity") +
+  theme_bw() +
+  guides(fill=guide_legend(title.position="top",ncol=2)) +
+  geom_hline(yintercept=0,color="red")+
+  theme(legend.position="bottom") +
+  facet_wrap(~region,ncol=2)
+
+```
+
+Here are the continents:
+
+```{r continentalPatterns, fig.height= 13, echo=FALSE,warning=FALSE, message=FALSE}
+
+ggplot() + 
+  geom_smooth(data=data,aes(x=date,y=mean)) + # Basic UDS score
+  geom_segment(data = PowellThyne %>% filter(coup > 0),aes(x=date,xend=date,y=-3,yend=3,color=reorder(attempt_type,-coup)),alpha=0.5)  + # Coup lines
+  geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945),aes(x=enddate,xend=enddate,y=-3,yend=3),alpha=0.5,linetype=3,color="black")  + # Irregular exits lines
+  geom_rect(data=interruptions %>% filter(year(enddate) > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3),alpha=0.05) + # Polity interregnums and interruptions 
+  geom_rect(data=conflicts %>% filter(end_year > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3,fill=TypeOfConflict,alpha=IntensityLevel)) + 
+  scale_alpha_discrete(range=c(0.02,0.1)) + # Wars
+  coord_cartesian(ylim=c(-1.5,1.5),xlim=c(ymd(19450101,20150101))) +
+  labs(y="Mean Unified Democracy Score", fill="Type of armed conflict (UCDP/PRIO)",x="Year",color="Coup?",alpha="Conflict intensity") +
+  theme_bw() +
+  guides(fill=guide_legend(title.position="top",ncol=2)) +
+  theme(legend.position="bottom") +
+  geom_hline(yintercept=0,color="red")+
+  facet_wrap(~continent,ncol=1)
+
+```
+
+And finally, the world:
+
+```{r worldPatterns, echo=FALSE,warning=FALSE, message=FALSE}
+ggplot() + 
+  geom_smooth(data=data,aes(x=date,y=mean)) + # Basic UDS score
+  geom_segment(data = PowellThyne %>% filter(coup > 0),aes(x=date,xend=date,y=-3,yend=3,color=reorder(attempt_type,-coup)),alpha=0.3)  + # Coup lines
+  geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945),aes(x=enddate,xend=enddate,y=-3,yend=3),alpha=0.3,linetype=3,color="black")  + # Irregular exits lines
+  geom_rect(data=interruptions %>% filter(year(enddate) > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3),alpha=0.05) + # Polity interregnums and interruptions 
+  geom_rect(data=conflicts %>% filter(end_year > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=-3,ymax=3,fill=TypeOfConflict,alpha=IntensityLevel)) + 
+  scale_alpha_discrete(range=c(0.01,0.05)) + # Wars
+  coord_cartesian(ylim=c(-1.5,1.5),xlim=c(ymd(19450101,20150101))) +
+  labs(y="Mean Unified Democracy Score", fill="Type of armed conflict (UCDP/PRIO)",x="Year",color="Coup?",alpha="Conflict intensity") +
+  theme_bw() +
+  guides(fill=guide_legend(title.position="top",ncol=2)) +
+  geom_hline(yintercept=0,color="red")+
+  theme(legend.position="bottom") 
+
+```
+
+
+Haiti and the Dominican Republic are especially striking:
+
+```{r Argentina, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE, fig.height=35}
+library(scales)
+
+uds$mean_rescaled <- rescale(uds$mean,to=c(-10,10),from=c(min(uds$pct025),max(uds$pct975)))
+uds$pct025_rescaled <- rescale(uds$pct025,to=c(-10,10),from=c(min(uds$pct025),max(uds$pct975)))
+uds$pct975_rescaled <- rescale(uds$pct975,to=c(-10,10),from=c(min(uds$pct025),max(uds$pct975)))
+
+maddison <- maddison %>% filter(!is.na(value))
+maddison$value_rescaled_log <- rescale(log(maddison$value),to=c(-10,10))
+
+deep_history <- function(country1) {
+  # print(paste("Starting",country1))
+  data <- polity_cases %>% filter(country %in% country1) %>% select(ccode,country,region,continent,startdate,enddate,polity)
+  
+  data2 <- data %>% mutate(startdate = enddate)
+  data <- rbind(data,data2) %>% arrange(country,startdate)
+  rm(data2)
+
+  p <- ggplot() +  
+    geom_path(data=data,aes(y=startdate,x=ifelse(polity > -11,polity,NA)))  # Basic Polity score
+  if(nrow(PowellThyne %>% filter(country %in% country1)) > 0) {
+    p <- p + geom_segment(data = PowellThyne %>% filter(country %in% country1),aes(y=date,yend=date,x=-11,xend=11,linetype=reorder(attempt_type,-coup),color =reorder(attempt_type,-coup)),alpha=0.5)   # Coup lines
+    }
+  if(nrow(maddison %>% filter(country %in% country1,!is.na(value))) > 0) {
+    p <- p + geom_path(data = maddison %>% filter(country %in% country1),aes(y=date,x=value_rescaled_log),alpha=0.5, color="blue")
+    p <- p + geom_text(data = maddison %>% filter(country %in% country1, year %in% year(archigos$enddate[ archigos$country %in% country1 ])),aes(y=date,x=value_rescaled_log + 2,label=dollar(value)),alpha=0.3, color="blue")
+    p <- p + geom_text(data = maddison %>% filter(country %in% country1) %>% group_by(country) %>% filter(year == max(year)),aes(y=date,x=value_rescaled_log + 2,label=dollar(value)),alpha=0.3, color="blue")
+    }
+  if(nrow(uds %>% filter(country %in% country1)) > 1) {
+    p <- p + geom_path(data = uds %>% filter(country %in% country1),aes(y=date,x=mean_rescaled),alpha=0.3)
+    d <- uds %>% filter(country %in% country1)
+    positions <- data.frame(x = c(d$pct025_rescaled,d$pct975_rescaled[length(d$pct975_rescaled):1]), y = c(d$date,d$date[length(d$date):1]))
+    p <- p + geom_polygon(data = positions,aes(x=x,y=y),alpha=0.2,fill="grey")
+    }
+  if(nrow(interruptions %>% filter(country %in% country1)) > 0) {
+    p <- p + geom_rect(data=interruptions %>% filter(country %in% country1),aes(ymin=startdate,ymax=enddate,xmin=-11,xmax=11),alpha=0.2) # Polity interregnums and interruptions 
+    }
+  if(nrow(conflicts %>% filter(country %in% country1)) > 0) {
+    p <- p + geom_rect(data=conflicts %>% filter(country %in% country1),aes(ymin=startdate,ymax=enddate,xmin=-11,xmax=11,fill=TypeOfConflict),alpha=0.2) + # Wars
+      geom_text(data=conflicts %>% filter(country %in% country1),aes(y=int_start(int_shift(interval(startdate,enddate),by=duration(int_length(interval(startdate,enddate))/2))),x=5,label=paste(SideA,"vs",SideB),size=IntensityLevel)) + scale_size_discrete(range=c(2,3))
+    }
+  if(nrow(archigos %>% filter(country %in% country1)) > 0) {
+    if(nrow(archigos %>% filter(country %in% country1,exit == "Irregular means"))) {
+      p <- p + geom_segment(data = archigos %>% filter(country %in% country1,exit == "Irregular means"),aes(y=enddate,yend=enddate,x=-11,xend=11),linetype = 3,alpha=0.5) #Irregular exit lines
+    }
+    p <- p + geom_text(data = archigos %>% filter(country %in% country1),aes(y=enddate,x=-5,label=leader,alpha=exit),position=position_dodge(width=1)) #Leader names
+    
+    }
+  p <- p + geom_segment(data=GWCodes %>% filter(GW_country %in% country1),aes(y=GW_startdate,yend=GW_startdate,x=-11,xend=11),color="green",linetype=4,size=2,alpha=0.2) +
+    geom_text(data=GWCodes %>% filter(GW_country %in% country1),aes(x=0,y=GW_startdate,label="Entry into state system/Independence"),alpha=0.2,color="green")
+  if(nrow(GWCodes %>% filter(GW_country %in% country1,!is.na(GW_enddate))) > 0) {
+    p <- p + geom_segment(data=GWCodes %>% filter(GW_country %in% country1),aes(y=GW_enddate,yend=GW_enddate,x=-11,xend=11),color="red",linetype=4,size=2,alpha=0.2) +
+      geom_text(data=GWCodes %>% filter(GW_country %in% country1),aes(x=0,y=GW_enddate,label="End of independence/exit from state system"),alpha=0.2,color="red")
+  }
+  p <- p + labs(y="Year",x="Polity score",alpha="Mode of leader exit",size="Conflict intensity",fill="Type of armed conflict (UCDP/PRIO)",color="Coup?",linetype="Coup?")+
+    facet_wrap(~country) +
+    coord_cartesian(xlim=c(-11,11),ylim=c(ymd(18700101),ymd(20150101))) +
+    theme_bw() +
+    guides(fill=guide_legend(title.position="top",ncol=2),color=guide_legend(title.position="top",ncol=2),alpha=guide_legend(title.position="top",ncol=2),size=guide_legend(title.position="top",ncol=2))+
+    scale_y_datetime(breaks=c(round_date(archigos$enddate[ archigos$country %in% country1 ],"year"),round_date(polity_cases$enddate[ polity_cases$country %in% country1 ],"year")), labels=date_format("%Y")) +
+    theme(legend.position="bottom")
+  p
+}
+
+deep_history(c("Argentina"))
+
+# To generate all the country histories:
+# countries <- levels(factor(polity_cases$country))[ !(levels(factor(polity_cases$country)) %in% c("Baden","Great Colombia","Two Sicilies","Württemberg","Kosovo","Modena","Montenegro","Papal States","Parma","Saxony","Tuscany","United Provinces of Central America")) ]
+# 
+# for(country in countries) {
+#   print(country)
+#   deep_history(country)
+#   print(paste("Saving",country))
+#   ggsave(paste0("Histories of instability/",str_replace_all(country,"/|\'","-"),".png"),height=35)
+# }
+  
+
+```
+
+Let's look at coups in more detail. They are more associated with the lower levels of democracy:
+
+```{r udsCoupsAggregated, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <- left_join(uds,PowellThyne, by=c("country","year")) %>% filter(year>1949) 
+
+qplot(data=data %>% filter(!is.na(attempt_type)),x=lag(mean),fill=attempt_type, geom="bar")+ 
+  theme_bw() + 
+  labs(y="Number of coups",x="Unified Democracy Score",fill="Coup?")
+
+ggplot() +
+  geom_density(data=data,aes(x=lag(mean),fill=attempt_type, color = attempt_type),alpha=0.2)+ 
+  theme_bw() + 
+  labs(y="Estimated density of distribution \nof coups by democracy level",x="Democracy level at time of coup, UDS",fill="Coup?",color="Coup?")
+```
+
+Most coups are associated with decreases in democracy; but especially since the end of the cold war, some lead to democratic outcomes. The classic case was the revolution of the carnations in Portugal.
+
+```{r udsCoupsChanges, fig.height=25, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <- PowellThyne %>% 
+  filter(coup ==2) %>%
+  group_by(country) %>%
+  mutate(coup_period = seq_along(country)) %>% 
+  group_by(country,coup_period,coup,year) %>%
+  do(data.frame(years_since_coup = -1:10)) %>%
+  group_by(country,coup_period) %>%
+  mutate(coup_year = year,year = seq(from=min(year)-1,length.out=length(year))) %>%
+  select(country,coup_period,year,coup_year,years_since_coup)
+
+data <- left_join(data, uds, by=c("country","year"))
+
+data <- data %>% 
+  filter(!is.na(mean)) %>%
+  group_by(country,coup_period) %>%
+  distinct(country,coup_period,year) %>%
+  mutate(mean_before_coup = lag(mean),
+         change = mean - mean_before_coup,
+         normalized_mean_before_coup = mean_before_coup - nth(mean_before_coup,2),
+         first_diff = nth(normalized_mean_before_coup,3))
+
+data <- left_join(data, PowellThyne %>% filter(coup == 2), by=c("country","year"))
+
+data <- ungroup(data) %>% 
+  mutate(post_cold_war = ifelse(coup_year > 1989,TRUE,FALSE))
+
+data$country <- reorder(data$country,data$first_diff,na.rm=TRUE)
+
+#data %>% select(country, year, coup_period, coup, coup_year,mean_before_coup,normalized_mean_before_coup,first_diff) %>% filter(country == "Egypt")
+
+ggplot(data=data,aes(x=years_since_coup,y=normalized_mean_before_coup))+ 
+         geom_point(aes(x=years_since_coup,y=normalized_mean_before_coup,color=post_cold_war)) +
+         geom_path(aes(x=years_since_coup,y=normalized_mean_before_coup,group=coup_period,color=post_cold_war)) +
+  theme_bw() + 
+    labs(x="Years since successful coup",y="Change in UD Score relative to pre-coup year",color="Coup after cold war?") + 
+  geom_hline(yintercept=0,color="red") +
+  scale_x_continuous(breaks=c(0:10)) +
+  coord_cartesian(xlim=c(0,10)) +
+  theme(legend.position="bottom") +
+  facet_wrap(~country,ncol=4)
+
+```
+
+Coups after the cold war have tended to be more democratizing, as Marinov and note.
+
+```{r udsCoupsChanges2, echo=FALSE, warning=FALSE, message=FALSE}
+
+ggplot(data=data) + 
+  geom_smooth(aes(x=years_since_coup,y=normalized_mean_before_coup,color=post_cold_war))  + 
+  labs(x="Years since successful coup",y="Change in UD Score relative to pre-coup year",color="Coup after cold war?") + geom_hline(yintercept=0,color="red") + 
+  theme_bw() +scale_x_continuous(breaks=c(0:10))
+
+```
+
+Another way of visualizing political instability is to look at changes in regime. [Geddes, Wright, and Frantz](http://sites.psu.edu/dictators/) have gathered fairly granular data on regime types, focusing on whether the main institutions of the regime are the military, a single party, a monarchy, or some combination of the three, and on the degree of "personalism" in the regime. And though military regimes always emerge form succcesful coups, many times what comes out of a coup is not a military regime - but often a personalistic one. 
+
+```{r gwfCoups, echo=FALSE,fig.height=20, warning=FALSE, message=FALSE}
+data <- uds %>% filter(country %in% PowellThyne$country[ PowellThyne$coup == 2], country %in% gwf_regimetypes$country) 
+
+gwf_regimetypes <- gwf_regimetypes %>%
+  mutate(military_regime = ifelse(grepl("military",full_regimetype) & !grepl("-",full_regimetype),"3 Pure military",ifelse(grepl("military",full_regimetype) & grepl("-",full_regimetype),"2 Mixed military","1 Non-military")),personal_regime = ifelse(grepl("personal",full_regimetype) & !grepl("-",full_regimetype),"3 Pure personal",ifelse(grepl("personal",full_regimetype) & grepl("-",full_regimetype),"2 Mixed personal","1 Non-personal")), party_regime = ifelse(grepl("party",full_regimetype) & !grepl("-",full_regimetype),"3 Pure party",ifelse(grepl("party",full_regimetype) & grepl("-",full_regimetype),"2 Mixed party","1 Non-party")))
+
+total_military <- gwf_regimetypes %>% group_by(country,military_regime,period_number) %>% summarise(total_years = end_year - begin_year) %>% group_by(country,military_regime) %>% summarise(total_years = sum(total_years)) %>% ungroup() %>% mutate(weighted =  total_years * (as.numeric(as.factor(military_regime))-1)) %>% group_by(country) %>% summarise(weighted_years = sum(weighted))
+
+data <- left_join(data,total_military)
+
+data <- data %>% arrange(desc(weighted_years)) %>% ungroup()
+
+data$country <- reorder(data$country,as.numeric(rownames(data)))
+
+ggplot() + 
+  geom_line(data=data,aes(x=year,y=mean)) + # Basic UDS score
+  geom_ribbon(data=data,aes(x=year,ymax=pct975,ymin=pct025),alpha=0.2) + # 95% confidence interval
+  geom_vline(data = PowellThyne%>% filter(coup == 2, country %in% gwf_regimetypes$country) ,aes(xintercept=year,linetype=reorder(attempt_type,-coup),color=reorder(attempt_type,-coup)))  + # Coup lines
+  geom_rect(data=gwf_regimetypes %>% filter(country %in% PowellThyne$country[ PowellThyne$coup == 2], country %in% gwf_regimetypes$country),aes(xmin=begin_year,xmax=end_year+1,ymin=-3,ymax=3,fill=military_regime,alpha=personal_regime)) + # Regimetypes
+  scale_alpha_discrete(range=c(0.1,0.5)) +
+  coord_cartesian(ylim=c(-3,3),xlim=c(1946,2015)) +
+  labs(y="Mean Unified Democracy Score", fill="Regime type", alpha = "Degree of personalism")+
+  facet_wrap(~country,ncol=4) +
+  theme_bw() +
+  guides(fill=guide_legend(title.position="top",ncol=4)) +
+  theme(legend.position="bottom")
+
+
+```
+
+Instability is associated with poverty; but some surprisingly rich countries do not suffer from much instability, while some very poor countries have little recorded instability.
+
+Coups are more common in poor countries, as one might expect, and they appear to be more succesful in such countries:
+
+
+```{r maddisonCoupsAggregated, echo=FALSE, warning=FALSE, message=FALSE}
+library(scales)
+
+data <- left_join(maddison,PowellThyne,by=c("country","year")) %>% filter(!is.na(value),year>1949,!is.na(maddison_country)) 
+
+qplot(data=data %>% filter(!is.na(attempt_type)),x=value,fill=attempt_type, geom="bar",binwidth=0.1)+ 
+  theme_bw() + 
+  labs(y="Number of coups",x="Income level",fill="Coup?")+ 
+  scale_x_log10(labels=dollar,breaks=c(100,1000,10000,100000))
+
+ggplot() +
+  geom_density(data=data,aes(x=value,fill=attempt_type, color = attempt_type),alpha=0.2)+ 
+  theme_bw() + 
+  labs(y="Estimated density of distribution \nof coups by income level",x="Income level",fill="Coup?",color="Coup?")+ 
+  scale_x_log10(labels=dollar,breaks=c(100,1000,10000,100000))
+
+```
+
+Indeed, all forms of instability are more common at lower levels of income.Yet some surprisingly poor countries have little instability, and some surprisingly rich ones do, though countries tend to graduate from instability after htey reach a (country-specific) threshold:
+
+```{r maddisonCoups1, echo=FALSE,fig.height=35, warning=FALSE,message=FALSE}
+library(scales)
+
+data <- maddison %>% 
+  filter(!is.na(value),year>1949) 
+
+#Order the countries in accordance with their avg. GDP per capita
+data$country <- reorder(data$country,data$value)
+
+ggplot() + 
+  geom_line(data=data,aes(x=date,y=value)) + # GDP per capita
+  scale_y_log10(labels=dollar) +
+  geom_segment(data = PowellThyne  %>% filter(coup > 0),aes(x=date,xend=date,y=100,yend=30000,color=reorder(attempt_type,-coup)))  + # Coup lines
+  geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945) ,aes(x=enddate,xend=enddate,y=100,yend=30000) ,linetype=3,color="black")  + # Irregular exits lines
+  geom_rect(data=interruptions %>% filter(enddate > ymd(19451231)) ,aes(xmin=startdate,xmax=enddate,ymin=100,ymax=30000),alpha=0.2) + # Polity interregnums and interruptions 
+  geom_rect(data=conflicts %>% filter(end_year > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=100,ymax=30000,fill=TypeOfConflict,alpha=IntensityLevel)) + 
+  scale_alpha_discrete(range=c(0.05,0.2)) + # Wars
+  coord_cartesian(ylim=c(100,30000),xlim=c(ymd(19450101,20150101))) +
+  labs(y="Mean Unified Democracy Score", fill="Type of armed conflict (UCDP/PRIO)",x="Year",color="Coup?",alpha="Conflict intensity")+
+  facet_wrap(~country,ncol=4) +
+  theme_bw() +
+  guides(fill=guide_legend(title.position="top",ncol=2)) +
+  theme(legend.position="bottom")
+
+
+```
+
+Low growth is less associated with coups than one might expect (there's no particular difference in mean between the growth rates of countries with instability and without), though there is a hint of greater instability at the tail end of the distribution of growth rates. Very low growth rates seem to be correlated with instability:
+
+```{r maddisonCoupsAggregatedGrowth, echo=FALSE,warning=FALSE, message=FALSE}
+data <- maddison
+
+data <- data %>% 
+  group_by(country) %>% 
+  mutate(growth = c(NA,diff(value))/lag(value)) %>%
+  filter(!is.na(growth), year > 1949)
+
+data <- left_join(data,PowellThyne %>% select(ccode,year,coup,attempt_type))  
+
+data <- left_join(data, ucdpConflict %>% select(ccode,year,ConflictId))
+
+data <- left_join(data, archigos %>% filter(exit == "Irregular means") %>% select(ccode,year,exit))
+
+data <- data %>%
+  mutate(has_coup = !is.na(coup),
+         has_conflict = !is.na(ConflictId),
+         has_irregular = !is.na(exit),
+         has_any = has_coup | has_conflict | has_irregular,
+         has_all = has_coup & has_conflict & has_irregular)
+
+qplot(data=data %>% distinct(country,year,value,has_any),x=growth,fill=has_any, geom="bar",binwidth=0.01,position="dodge")+ 
+  theme_bw() + 
+  labs(y="Number of years with instability",x="Avg growth rate",fill="Has instability?")+ 
+  coord_cartesian(xlim=c(-0.15,0.15))+
+  scale_x_continuous(labels=percent)
+
+ggplot() + 
+  geom_density(data=data %>% distinct(country,year,value,has_any),aes(x=growth,color=has_any, fill=has_any),alpha=0.2)+ 
+  theme_bw() + 
+  labs(y="Estimated density of years with instability",x="GDP growth rate",color="Has instability?", fill= "Has instability?")+ 
+  coord_cartesian(xlim=c(-0.15,0.15))+
+  scale_x_continuous(labels=percent)
+```
+
+But most countries that experience cooups have lower growth rates both before and after the instability event:
+
+```{r growthRateInstabilityEvents, fig.height=25, echo=FALSE,warning=FALSE, message=FALSE}
+
+data <- PowellThyne %>%
+  group_by(country,date,coup,year) %>%
+  do(data.frame(years_since_coup = -3:10)) %>%
+  group_by(country,date) %>%
+  mutate(coup_year = year,year = seq(from=min(year)-3,length.out=length(year))) %>%
+  select(country,date,year,coup_year,years_since_coup)
+
+data <- left_join(data, maddison, by=c("country","year"))
+
+data <- data %>% 
+  group_by(country,date.x) %>%
+  distinct(country,date.x,year) %>%
+  filter(min(years_since_coup) < -2) %>%
+  mutate(normalized_value = value * 100/nth(value,4),
+         first_diff = nth(normalized_value,5))
+
+data <- left_join(data, PowellThyne, by=c("country","year"))
+
+data <- ungroup(data) %>% 
+  mutate(post_cold_war = ifelse(coup_year > 1989,TRUE,FALSE))
+
+#data %>% filter(country =="Bolivia") %>% select(country,year,date.x,value,normalized_value,first_diff,years_since_coup)
+
+data <- data %>% filter(!is.na(normalized_value))
+
+data$country <- reorder(data$country,data$first_diff,na.rm=TRUE)
+
+ggplot() + 
+  geom_point(data=data,aes(x=years_since_coup,y=normalized_value,color=post_cold_war),position="jitter")+ 
+  geom_path(data=data,aes(x=years_since_coup,y=normalized_value,group=date.x,color=post_cold_war))+
+  geom_vline(xintercept=0,color="red") +
+  labs(x="Years since coup", y = "Changes in GDP from year of the coup (year of coup = 100)",color="After cold war?") +
+  #coord_cartesian(ylim=c(90,120)) +
+  facet_wrap(~country,ncol=4) +
+  theme_bw() +
+  theme(legend.position="bottom") +
+  guides(color=guide_legend(title.position="top"))
+
+
+
+```
+
+Afteer and before cold war
+
+```{r growthRateInstabilityEvents2, echo=FALSE, warning=FALSE,message=FALSE}
+ggplot()  + 
+  geom_smooth(data=data,aes(x=years_since_coup,y=normalized_value,color=post_cold_war)) + scale_x_continuous(breaks=-2:10)+
+  labs(x="Years since coup", y= "GDP per capita (year of coup = 100)", color="After Cold War?")+
+  theme_bw()
+```
+
+
+
+
