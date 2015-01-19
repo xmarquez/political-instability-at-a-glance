@@ -289,12 +289,12 @@ gwf <- gwf %>%
 
 # Dataset with start and end dates of each conflict episode - useful for plotting below
 conflicts <- ucdpConflict %>% 
-  group_by(country,ConflictId) %>%
+  group_by(country,ConflictId,SideB) %>%
   mutate(period_number =  (c(diff(IntensityLevel),0)), 
          period_number = cumsum(abs(period_number)),
          period_number = lag(period_number),
          period_number=ifelse(is.na(period_number),0,period_number)) %>% 
-  group_by(country,ConflictId,period_number) %>% 
+  group_by(country,ConflictId,SideB,period_number) %>% 
   mutate(start_year = min(year),end_year=max(year), 
          EpEndDate = ifelse(is.na(EpEndDate),paste0(end_year,"-12-31"),as.character(EpEndDate)),
          StartDate2 = ifelse(StartDate2 < start_year, paste0(start_year,"-01-01"),as.character(StartDate2)),startdate = ymd(StartDate2),enddate = ymd(EpEndDate)) %>% 
@@ -414,8 +414,11 @@ ggplot() +
 
 ```
 
+We can also take a look at the more in-depth picture one can assemble from these datasets; one can get a sort of "geological" picture by unrolling the traces of history in these quantitative datasets. Here's Argentina, for example:
 
-Haiti and the Dominican Republic are especially striking:
+(How to read the picture: most recent events recorded are at the top. The black line represents the Polity score for the country; to the right is "more democratic," to the left "more autocratic." The jagged line in the middle with the light grey ribbon around it)
+(Auto-generated deep histories for all countries in the Polity datasets are available [in the GitHub repository for this post](https://github.com/xmarquez/political-instability-at-a-glance/tree/master/Histories%20of%20instability), or through the GitHub repository for this post) 
+[Haiti](https://github.com/xmarquez/political-instability-at-a-glance/blob/master/Histories%20of%20instability/Haiti.png) and the [Dominican Republic](https://github.com/xmarquez/political-instability-at-a-glance/blob/master/Histories%20of%20instability/Dominican%20Republic.png) are especially striking: And here are [Venezuela](https://github.com/xmarquez/political-instability-at-a-glance/blob/master/Histories%20of%20instability/Venezuela.png), [the United States](https://github.com/xmarquez/political-instability-at-a-glance/blob/master/Histories%20of%20instability/United%20States%20of%20America.png), [New Zealand](https://github.com/xmarquez/political-instability-at-a-glance/blob/master/Histories%20of%20instability/New%20Zealand.png). And here is [Spain](https://github.com/xmarquez/political-instability-at-a-glance/blob/master/Histories%20of%20instability/Spain.png)
 
 ```{r Argentina, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE, fig.height=35}
 library(scales)
@@ -639,10 +642,10 @@ data$country <- reorder(data$country,data$value)
 ggplot() + 
   geom_line(data=data,aes(x=date,y=value)) + # GDP per capita
   scale_y_log10(labels=dollar) +
-  geom_segment(data = PowellThyne  %>% filter(coup > 0),aes(x=date,xend=date,y=100,yend=30000,color=reorder(attempt_type,-coup)))  + # Coup lines
-  geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945) ,aes(x=enddate,xend=enddate,y=100,yend=30000) ,linetype=3,color="black")  + # Irregular exits lines
-  geom_rect(data=interruptions %>% filter(enddate > ymd(19451231)) ,aes(xmin=startdate,xmax=enddate,ymin=100,ymax=30000),alpha=0.2) + # Polity interregnums and interruptions 
-  geom_rect(data=conflicts %>% filter(end_year > 1945) ,aes(xmin=startdate,xmax=enddate,ymin=100,ymax=30000,fill=TypeOfConflict,alpha=IntensityLevel)) + 
+  geom_segment(data = PowellThyne  %>% filter(country %in% data$country),aes(x=date,xend=date,y=100,yend=30000,color=reorder(attempt_type,-coup)))  + # Coup lines
+  geom_segment(data = archigos %>% filter(exit == "Irregular means", year > 1945,country %in% data$country) ,aes(x=enddate,xend=enddate,y=100,yend=30000) ,linetype=3,color="black")  + # Irregular exits lines
+  geom_rect(data=interruptions %>% filter(enddate > ymd(19451231),country %in% data$country) ,aes(xmin=startdate,xmax=enddate,ymin=100,ymax=30000),alpha=0.2) + # Polity interregnums and interruptions 
+  geom_rect(data=conflicts %>% filter(end_year > 1945,country %in% data$country) ,aes(xmin=startdate,xmax=enddate,ymin=100,ymax=30000,fill=TypeOfConflict,alpha=IntensityLevel)) + 
   scale_alpha_discrete(range=c(0.05,0.2)) + # Wars
   coord_cartesian(ylim=c(100,30000),xlim=c(ymd(19450101,20150101))) +
   labs(y="Mean Unified Democracy Score", fill="Type of armed conflict (UCDP/PRIO)",x="Year",color="Coup?",alpha="Conflict intensity")+
@@ -737,7 +740,7 @@ ggplot() +
 
 ```
 
-Afteer and before cold war
+After and before cold war
 
 ```{r growthRateInstabilityEvents2, echo=FALSE, warning=FALSE,message=FALSE}
 ggplot()  + 
@@ -745,7 +748,7 @@ ggplot()  +
   labs(x="Years since coup", y= "GDP per capita (year of coup = 100)", color="After Cold War?")+
   theme_bw()
 ```
-
+Code for all the graphs in this post is available at [this Github repository](https://github.com/xmarquez/political-instability-at-a-glance). The vast majority of the code is basically data-munging; you will need to download some of the datasets separately. (See the code for details).
 
 
 
