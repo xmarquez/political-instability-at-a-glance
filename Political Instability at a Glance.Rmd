@@ -1,6 +1,9 @@
 ---
 title: "Political Instability at a Glance"
-output: html_document
+output:
+  html_document:
+    keep_md: yes
+    self_contained: no
 ---
 
 (A graph-heavy post on the post-WWII history of political instability.)
