@@ -1,0 +1,1 @@
+This repository containscode for all the graphs in [this post](http://abandonedfootnotes.blogspot.com) on political instability, as well as large-scale pictures of political instability (in the folder "Histories of Political Instability")
